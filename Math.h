@@ -1,1 +1,1 @@
-unsigned int mediane(float arr[], int size);
+float mediane(float arr[], int size);

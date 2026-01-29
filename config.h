@@ -38,3 +38,5 @@ extern unsigned long muteUntilMs;
 extern const unsigned int nb_mesure;
 extern const unsigned int delais_mesure;
 
+// --------- BLE ----------------------------
+
