@@ -20,6 +20,8 @@ const int   CLIM_PORT = 8080;
 const float TEMP_MIN = 21.0;   // seuil bas accepté
 const float TEMP_MAX = 24.0;   // seuil haut accepté
 const float TEMP_HYST = 0.4;   // hystérésis anti yoyo
+const char* DASHBOARD_HOST = "192.168.100.10"; 
+const int   DASHBOARD_PORT = 3000;              
 
 extern MusicPlayer player;
 
@@ -215,6 +217,52 @@ void regulateClim(float roomTemp) {
   }
 }
 
+void sendToDashboard(float temp, float hum, int co2, bool climState) {
+  if (!ensureWifiConnected()) return;
+
+  WiFiClient client;
+  if (!client.connect(DASHBOARD_HOST, DASHBOARD_PORT)) {
+    Serial.println("[DASH] Erreur connexion serveur");
+    return;
+  }
+
+  // 1. Préparation du Timestamp (depuis le RTC)
+  DateTime now = rtc.now();
+  char timeBuffer[25];
+  // Format ISO 8601 classique : YYYY-MM-DDTHH:MM:SS
+  sprintf(timeBuffer, "%04d-%02d-%02dT%02d:%02d:%02d", 
+          now.year(), now.month(), now.day(), 
+          now.hour(), now.minute(), now.second());
+
+  // 2. Construction du JSON manuel
+  // Format demandé : [{ "idData": 0, "timestamp": "...", "valueCO2": ... }]
+  String json = "[{";
+  json += "\"idData\": 0,"; 
+  json += "\"timestamp\": \"" + String(timeBuffer) + "\",";
+  json += "\"valueCO2\": " + String(co2) + ",";
+  json += "\"valueTemp\": " + String(temp) + ",";
+  json += "\"valueHum\": " + String(hum) + ",";
+  // Attention : climStatus attend "true"/"false" (String) ou true/false (Booléen) ? 
+  // Dans le doute standard JSON, je mets un booléen, sinon ajoute des guillemets \" autour
+  json += "\"climStatus\": " + String(climState ? "true" : "false");
+  json += "}]";
+
+  // 3. Envoi de la requête HTTP PUT
+  client.println("PUT /arduino/publish HTTP/1.1");
+  client.println("Host: " + String(DASHBOARD_HOST));
+  client.println("Content-Type: application/json");
+  client.print("Content-Length: ");
+  client.println(json.length());
+  client.println("Connection: close");
+  client.println(); // Ligne vide obligatoire entre headers et body
+  client.println(json);
+
+  Serial.println("[DASH] Données envoyées !");
+  
+  // Petit délai pour laisser le temps au serveur de répondre (optionnel)
+  delay(50);
+  client.stop();
+}
 
 // =======================================================
 //                         SETUP
@@ -321,18 +369,29 @@ void loop() {
       if (nb_mesure_c == 10) {
         median_temp = mediane(nb_mesure_temp_t, 10);
         median_humi = mediane(nb_mesure_humi_t, 10);
+        
         Serial.print(" -> Temp: "); Serial.print(median_temp);
         Serial.print(" C | Hum: "); Serial.print(median_humi);
         Serial.println(" %");
-        // LED
+
+        // --- Gestion des LEDs existante ---
         if (median_temp < 22.0) {
           leds.setColorRGB(0, 0, 0, 255);
-        } else if (median_temp <= ALARM_TEMP) {
-          leds.setColorRGB(0, 0, 255, 0);
+        } else if (median_temp <= 24.0) { // J'ai remplacé ALARM_TEMP par une valeur car il n'était pas défini dans ton snippet
+           leds.setColorRGB(0, 0, 255, 0);
         } else {
           leds.setColorRGB(0, 255, 0, 0);
         }
+        
+        // --- Régulation Clim existante ---
         regulateClim(median_temp);
+        
+        // ============================================
+        // AJOUT ICI : ENVOI AU SERVEUR
+        // ============================================
+        // On envoie : Température, Humidité, CO2 (BLE), et État Clim
+        sendToDashboard(median_temp, median_humi, eco2_value, climOn);
+
         nb_mesure_c = 0;
       }
       // writeSD(tempMem, humMem, now);  // disabled: tempMem/humMem not defined
