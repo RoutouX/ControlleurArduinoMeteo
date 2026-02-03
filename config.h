@@ -5,6 +5,7 @@
 #include <AM2302-Sensor.h>
 #include <ChainableLED.h>
 #include "RTClib.h"
+#include <WiFiS3.h>
 
 // ----------------- HW PINS -----------------
 extern const byte DHTPIN;
@@ -25,6 +26,7 @@ extern RTC_DS1307 rtc;
 
 // ----------------- APP PARAMS -----------------
 extern const unsigned long SENSOR_PERIOD_MS;
+extern const float co2_buzz;
 extern const float ALARM_TEMP;
 extern bool alarmEnabled;
 
@@ -37,6 +39,12 @@ extern unsigned long muteUntilMs;
 // --------- Capteur----------------------------
 extern const unsigned int nb_mesure;
 extern const unsigned int delais_mesure;
+
+// --------- WiFi static IP --------------------
+extern IPAddress localIP;
+extern IPAddress gateway;
+extern IPAddress dns;
+extern IPAddress subnet;
 
 // --------- BLE ----------------------------
 

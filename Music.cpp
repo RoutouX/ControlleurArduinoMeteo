@@ -105,11 +105,10 @@ void MusicPlayer::tick(unsigned long nowMs) {
   phaseEndMs = nowMs + (unsigned long)playMs;
 }
 
-void alarm(bool isMuted, uint8_t lastStatus, float tempMem, float ALARM_TEMP, unsigned long nowMs) {
+void alarm(bool isMuted, float eco2, float co2_buzz, unsigned long nowMs) {
   bool shouldAlarm = !isMuted
-                     && lastStatus == 0
-                     && !isnan(tempMem)
-                     && tempMem > ALARM_TEMP;
+                     && !isnan(eco2)
+                     && eco2 > co2_buzz;
 
   if (shouldAlarm) {
     player.start();

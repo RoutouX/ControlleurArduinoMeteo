@@ -163,9 +163,6 @@ bool BleManager::writePayloadString(const char* s) {
 bool BleManager::writeAckU32(uint32_t seq) {
   if (_state != State::CONNECTED) return false;
   if (!_ack) return false;
-
-  // idem : pas de canWriteWithoutResponse() -> on teste canWrite()
   if (!_ack.canWrite()) return false;
-
   return _ack.writeValue((uint8_t*)&seq, sizeof(seq));
 }

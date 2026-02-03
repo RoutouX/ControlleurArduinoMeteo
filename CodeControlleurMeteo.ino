@@ -10,14 +10,23 @@
 #include "RTClib.h"
 #include <AM2302-Sensor.h>
 #include <ChainableLED.h>
+#include <WiFiS3.h> 
 
-
-
+// --- Config Clim / WiFi ---
+const char* WIFI_SSID = "A4_IOT_CESI";
+const char* WIFI_PASS = "WrVqBaGJRbRVh857KQzEmRtcnToVvo8kBh7VhDd8MjRUmHpEYS";
+const char* CLIM_HOST = "192.168.100.162";
+const int   CLIM_PORT = 8080;
+const float TEMP_MIN = 21.0;   // seuil bas accepté
+const float TEMP_MAX = 24.0;   // seuil haut accepté
+const float TEMP_HYST = 0.4;   // hystérésis anti yoyo
 
 extern MusicPlayer player;
+
 // =======================================================
 //                     SENSOR STATE
 // =======================================================
+
 uint8_t lastStatus = 255;
 
 unsigned int nb_mesure_c = 0;
@@ -26,10 +35,18 @@ float nb_mesure_humi_t[10] = {0};
 
 float median_temp = NAN;
 float median_humi = NAN;
+bool climOn = false;
 
 // =======================================================
 //                         BLE
 // =======================================================
+
+uint32_t g_seq = 0;
+uint32_t g_timestamp = 0;
+char g_datetime[24] = {0};
+int eco2_value = 0;
+bool g_payloadValid = false;
+
 
 BleManager ble;
 
@@ -43,6 +60,7 @@ static void onBleDisconnected() {
 
 static void onBleData(const uint8_t* data, size_t len) {
   static char line[96];
+
   size_t n = (len < sizeof(line)-1) ? len : sizeof(line)-1;
   memcpy(line, data, n);
   line[n] = '\0';
@@ -50,18 +68,151 @@ static void onBleData(const uint8_t* data, size_t len) {
   Serial.print("[APP] PAYLOAD: ");
   Serial.println(line);
 
-  // parse seq (avant le premier ';')
-  char* semi = strchr(line, ';');
-  if (!semi) return;
-  *semi = '\0';
+  // Découpe par ';'
+  char* token;
+  char* rest = line;
 
-  uint32_t seq = (uint32_t)strtoul(line, nullptr, 10);
+  // ---- seq ----
+  token = strtok_r(rest, ";", &rest);
+  if (!token) return;
+  g_seq = strtoul(token, nullptr, 10);
 
-  bool ok = ble.writeAckU32(seq);
+  // ---- timestamp ----
+  token = strtok_r(nullptr, ";", &rest);
+  if (!token) return;
+  g_timestamp = strtoul(token, nullptr, 10);
+
+  // ---- date/time ----
+  token = strtok_r(nullptr, ";", &rest);
+  if (!token) return;
+  strncpy(g_datetime, token, sizeof(g_datetime) - 1);
+
+  // ---- value ----
+  token = strtok_r(nullptr, ";", &rest);
+  if (!token) return;
+  eco2_value = atoi(token);
+
+  g_payloadValid = true;
+
+  Serial.print("  eco2 = "); Serial.println(eco2_value);
+
+  // ACK BLE
+  bool ok = ble.writeAckU32(g_seq);
   Serial.print("[APP] ACK ");
-  Serial.print(seq);
+  Serial.print(g_seq);
   Serial.print(" -> ");
   Serial.println(ok ? "OK" : "FAIL");
+
+  setAirQualityColor(eco2_value);
+}
+
+void setAirQualityColor(uint16_t eco2ppm) {
+  int r = 0, g = 0, b = 0;
+  if (eco2ppm < 400) eco2ppm = 400;
+  if (eco2ppm > 1000) eco2ppm = 1000;
+  float ratio = (eco2ppm - 400.0) / (1000.0 - 400.0);
+  r = ratio * 255;
+  g = (1.0 - ratio) * 255;
+  leds.setColorRGB(1, r, g, 0);
+}
+
+const char* wifiStatusToStr(int s) {
+  switch (s) {
+    case WL_CONNECTED: return "CONNECTED";
+    case WL_IDLE_STATUS: return "IDLE";
+    case WL_NO_SSID_AVAIL: return "NO_SSID";
+    case WL_SCAN_COMPLETED: return "SCAN_DONE";
+    case WL_CONNECT_FAILED: return "CONNECT_FAIL";
+    case WL_CONNECTION_LOST: return "CONN_LOST";
+    case WL_DISCONNECTED: return "DISCONNECTED";
+    case WL_NO_MODULE: return "NO_MODULE";
+    default: return "UNKNOWN";
+  }
+}
+
+bool ensureWifiConnected() {
+  static unsigned long lastAttemptMs = 0;
+  const unsigned long WIFI_RETRY_MS = 5000;
+
+  if (WiFi.status() == WL_CONNECTED) return true;
+
+  // Evite de spammer les tentatives
+  if (millis() - lastAttemptMs < WIFI_RETRY_MS) return false;
+  lastAttemptMs = millis();
+
+  if (strcmp(WIFI_SSID, "YOUR_WIFI") == 0) {
+    Serial.println("[CLIM] WiFi non configuré (SSID/PASS)");
+    return false;
+  }
+
+  Serial.print("[CLIM] WiFi begin SSID=");
+  Serial.println(WIFI_SSID);
+
+  // Force static IP configuration before connecting
+  WiFi.config(localIP, dns, gateway, subnet);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+    int st = WiFi.status();
+    Serial.print("[CLIM] ... ");
+    Serial.println(wifiStatusToStr(st));
+    delay(250);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("[CLIM] WiFi OK, IP=");
+    Serial.println(WiFi.localIP());
+    return true;
+  }
+
+  Serial.print("[CLIM] WiFi KO status=");
+  Serial.println(wifiStatusToStr(WiFi.status()));
+  Serial.print("[CLIM] Firmware=");
+  Serial.println(WiFi.firmwareVersion());
+  return false;
+}
+
+void sendClimCommand(const char* cmd, const char* value = nullptr) {
+  if (!ensureWifiConnected()) {
+    Serial.println("[CLIM] WiFi KO");
+    return;
+  }
+  WiFiClient client;
+  if (!client.connect(CLIM_HOST, CLIM_PORT)) {
+    Serial.println("[CLIM] Connexion clim échouée");
+    return;
+  }
+  String url = "/clim?command=";
+  url += cmd;
+  if (value) {
+    url += "&value=";
+    url += value;
+  }
+  client.print(String("GET ") + url + " HTTP/1.1\r\nHost: " + CLIM_HOST + "\r\nConnection: close\r\n\r\n");
+  client.stop();
+}
+
+void regulateClim(float roomTemp) {
+  if (isnan(roomTemp)) return;
+
+  if (roomTemp > TEMP_MAX + TEMP_HYST) {
+    char target[8];
+    dtostrf(TEMP_MAX, 0, 1, target);
+    sendClimCommand("TEMP", target);
+    if (!climOn) sendClimCommand("ON");
+    climOn = true;
+  } else if (roomTemp < TEMP_MIN - TEMP_HYST) {
+    char target[8];
+    dtostrf(TEMP_MIN, 0, 1, target);
+    sendClimCommand("TEMP", target);
+    if (!climOn) sendClimCommand("ON");
+    climOn = true;
+  } else if (climOn && roomTemp > TEMP_MIN + TEMP_HYST && roomTemp < TEMP_MAX - TEMP_HYST) {
+    sendClimCommand("OFF");
+    climOn = false;
+  }
 }
 
 
@@ -126,6 +277,7 @@ void setup() {
   leds.setColorRGB(1, 255, 255, 255);
   Serial.println("Station Meteo prete");
 
+  ensureWifiConnected();
 }
 
 // =======================================================
@@ -139,14 +291,11 @@ void loop() {
   static bool lastRead = HIGH;
   static unsigned long lastChangeMs = 0;
   const unsigned long DEBOUNCE_MS = 30;
-
   bool readNow = digitalRead(pinButton);
-
   if (readNow != lastRead) {
     lastRead = readNow;
     lastChangeMs = nowMs;
   }
-
   if ((nowMs - lastChangeMs) > DEBOUNCE_MS && readNow != stableState) {
     stableState = readNow;
     if (stableState == LOW) {
@@ -155,17 +304,13 @@ void loop() {
       Serial.println("MUTE 2 minutes !");
     }
   }
-
   bool isMuted = (nowMs < muteUntilMs);
-
-  // ------------------ Sensor + median + LED (your code) ------------------
   if (nowMs - lastSensorMs >= SENSOR_PERIOD_MS) {
     lastSensorMs = nowMs;
     noInterrupts();
     int status = am2302.read();
     interrupts();
     lastStatus = status;
-    
     if (status == 0) {
       DateTime now = rtc.now();
       float temp = am2302.get_Temperature();
@@ -173,14 +318,12 @@ void loop() {
       nb_mesure_temp_t[nb_mesure_c] = temp;
       nb_mesure_humi_t[nb_mesure_c] = humi;
       nb_mesure_c++;
-
       if (nb_mesure_c == 10) {
         median_temp = mediane(nb_mesure_temp_t, 10);
         median_humi = mediane(nb_mesure_humi_t, 10);
         Serial.print(" -> Temp: "); Serial.print(median_temp);
         Serial.print(" C | Hum: "); Serial.print(median_humi);
         Serial.println(" %");
-
         // LED
         if (median_temp < 22.0) {
           leds.setColorRGB(0, 0, 0, 255);
@@ -189,19 +332,17 @@ void loop() {
         } else {
           leds.setColorRGB(0, 255, 0, 0);
         }
-
+        regulateClim(median_temp);
         nb_mesure_c = 0;
       }
-
-      // writeSD(tempMem, humMem, now);
+      // writeSD(tempMem, humMem, now);  // disabled: tempMem/humMem not defined
     } else {
       Serial.println("Sensor status != 0");
       Serial.print("Sensor status = ");
       Serial.println(status);
     }
   }
-
-  alarm(isMuted, lastStatus, median_temp, ALARM_TEMP, nowMs);
+  alarm(isMuted, eco2_value, co2_buzz, nowMs);
 }
 
 void clean_exit() {

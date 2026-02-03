@@ -1,7 +1,7 @@
 //Leds.cpp
 #include <ChainableLED.h>
 
-void startupAnimation(ChainableLED leds) {
+void startupAnimation(ChainableLED& leds) {
   // Étape 1 : alternance bleue
   for (int i = 0; i < 4; i++) {
     leds.setColorRGB(0, 0, 0, 255);

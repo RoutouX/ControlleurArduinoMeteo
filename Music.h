@@ -120,4 +120,4 @@ struct MusicPlayer {
 
 extern MusicPlayer player;
 
-void alarm(bool isMuted, uint8_t lastStatus, float tempMem, float ALARM_TEMP, unsigned long nowMs);
+void alarm(bool isMuted, float eco2, float co2_buzz, unsigned long nowMs);

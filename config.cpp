@@ -1,5 +1,6 @@
 // Config.cpp
 #include "config.h"
+#include <WiFiS3.h>
 
 // ----------------- HW PINS -----------------
 const byte DHTPIN = 2;
@@ -18,8 +19,8 @@ AM2302::AM2302_Sensor am2302{ DHTPIN };
 RTC_DS1307 rtc;
 
 // ----------------- APP PARAMS -----------------
-const float ALARM_TEMP = 24.8f;
-
+const float co2_buzz = 1000;
+const float ALARM_TEMP = 25;
 unsigned long lastSensorMs = 0;
 
 // --------- MUTE BUTTON (2 minutes) ----------
@@ -32,5 +33,12 @@ extern const unsigned int nb_mesure = 10;
 extern const unsigned int delais_mesure;
 const unsigned long SENSOR_PERIOD_MS = 2010UL;
 
+//Wifi
+const char* ssid = "A4_IOT_CESI";
+const char* password = "WrVqBaGJRbRVh857KQzEmRtcnToVvo8kBh7VhDd8MjRUmHpEYS";
+IPAddress localIP(192, 168, 100, 170);
+IPAddress gateway(192, 168, 100, 252);
+IPAddress dns(192, 168, 100, 252);
+IPAddress subnet(255, 255, 255, 0);
 
-
+WiFiClient client;
