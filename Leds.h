@@ -1,4 +1,5 @@
-//Leds.h
+#pragma once
+
 #include <ChainableLED.h>
 
 

@@ -2,20 +2,22 @@
 #include <Arduino.h>
 #include <cstring>
 
+#include "Log.h"
+
 bool BleManager::begin(const Config& cfg) {
   _cfg = cfg;
 
   if (!_cfg.targetName || !_cfg.serviceUuid || !_cfg.payloadUuid || !_cfg.ackUuid) {
-    Serial.println("[BLE] Config invalid (missing targetName/serviceUuid/payloadUuid/ackUuid)");
+    logError("BLE", "Config invalid");
     return false;
   }
 
   if (!BLE.begin()) {
-    Serial.println("[BLE] BLE.begin() failed");
+    logError("BLE", "BLE.begin() failed");
     return false;
   }
 
-  Serial.println("[BLE] BLE ready");
+  logInfo("BLE", "Ready");
   resetToDisconnected_();
   return true;
 }
@@ -44,8 +46,7 @@ void BleManager::tryReconnect_() {
   if (millis() - _lastReconnectAttempt < _cfg.reconnectIntervalMs) return;
 
   _lastReconnectAttempt = millis();
-  Serial.print("[BLE] Scanning for: ");
-  Serial.println(_cfg.targetName);
+  logDebug("BLE", String("Scanning for ") + _cfg.targetName);
 
   BLE.stopScan();
   BLE.scanForName(_cfg.targetName);
@@ -56,8 +57,7 @@ void BleManager::scanStep_() {
   BLEDevice found = BLE.available();
   if (!found) return;
 
-  Serial.print("[BLE] Found: ");
-  Serial.println(found.localName());
+  logDebug("BLE", String("Found ") + found.localName());
 
   if (found.localName() == _cfg.targetName) {
     BLE.stopScan();
@@ -67,17 +67,18 @@ void BleManager::scanStep_() {
 }
 
 void BleManager::connectStep_() {
-  Serial.println("[BLE] Connecting...");
+  logDebug("BLE", "Connecting...");
 
   if (!_peripheral.connect()) {
-    Serial.println("[BLE] Connect failed");
+    logInfo("BLE", "Connect failed");
     resetToDisconnected_();
     return;
   }
 
-  Serial.println("[BLE] Connected, discovering attributes...");
+  logInfo("BLE", "Connected");
+  logDebug("BLE", "Discovering attributes...");
   if (!_peripheral.discoverAttributes()) {
-    Serial.println("[BLE] discoverAttributes failed");
+    logInfo("BLE", "discoverAttributes failed");
     _peripheral.disconnect();
     resetToDisconnected_();
     return;
@@ -85,7 +86,7 @@ void BleManager::connectStep_() {
 
   BLEService svc = _peripheral.service(_cfg.serviceUuid);
   if (!svc) {
-    Serial.println("[BLE] Service not found");
+    logInfo("BLE", "Service not found");
     _peripheral.disconnect();
     resetToDisconnected_();
     return;
@@ -93,7 +94,7 @@ void BleManager::connectStep_() {
 
   _payload = svc.characteristic(_cfg.payloadUuid);
   if (!_payload) {
-    Serial.println("[BLE] Payload characteristic not found");
+    logInfo("BLE", "Payload characteristic not found");
     _peripheral.disconnect();
     resetToDisconnected_();
     return;
@@ -101,7 +102,7 @@ void BleManager::connectStep_() {
 
   _ack = svc.characteristic(_cfg.ackUuid);
   if (!_ack) {
-    Serial.println("[BLE] ACK characteristic not found");
+    logInfo("BLE", "ACK characteristic not found");
     _peripheral.disconnect();
     resetToDisconnected_();
     return;
@@ -109,16 +110,16 @@ void BleManager::connectStep_() {
 
   if (_payload.canSubscribe()) {
     if (_payload.subscribe()) {
-      Serial.println("[BLE] Subscribed to payload notifications/indications");
+      logInfo("BLE", "Subscribed");
     } else {
-      Serial.println("[BLE] Subscribe failed (still connected)");
+      logInfo("BLE", "Subscribe failed");
     }
   } else {
-    Serial.println("[BLE] Payload cannot subscribe()");
+    logInfo("BLE", "Payload cannot subscribe");
   }
 
   _state = State::CONNECTED;
-  Serial.println("[BLE] READY");
+  logInfo("BLE", "READY");
   if (_onConnected) _onConnected();
 }
 
@@ -134,7 +135,7 @@ void BleManager::readStep_() {
 
 void BleManager::checkDisconnect_() {
   if (!_peripheral.connected()) {
-    Serial.println("[BLE] Disconnected");
+    logInfo("BLE", "Disconnected");
     if (_onDisconnected) _onDisconnected();
     resetToDisconnected_();
   }

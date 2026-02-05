@@ -20,25 +20,34 @@ RTC_DS1307 rtc;
 
 // ----------------- APP PARAMS -----------------
 const float co2_buzz = 1000;
-const float ALARM_TEMP = 25;
-unsigned long lastSensorMs = 0;
+const int SENSOR_MEDIAN_SAMPLES = 10;
+const unsigned long SENSOR_PERIOD_MS = 2010UL;
+const unsigned long DASHBOARD_PUBLISH_PERIOD_MS = 300000UL; // 5 minutes
 
 // --------- MUTE BUTTON (2 minutes) ----------
 const unsigned long MUTE_MS = 120000UL; // 2 minutes
-unsigned long muteUntilMs = 0;
 
-// Delais mesure
-
-extern const unsigned int nb_mesure = 10;
-extern const unsigned int delais_mesure;
-const unsigned long SENSOR_PERIOD_MS = 2010UL;
-
-//Wifi
-const char* ssid = "A4_IOT_CESI";
-const char* password = "WrVqBaGJRbRVh857KQzEmRtcnToVvo8kBh7VhDd8MjRUmHpEYS";
+// --------- WiFi static IP + credentials ----------
+const char* WIFI_SSID = "A4_IOT_CESI";
+const char* WIFI_PASS = "WrVqBaGJRbRVh857KQzEmRtcnToVvo8kBh7VhDd8MjRUmHpEYS";
 IPAddress localIP(192, 168, 100, 170);
 IPAddress gateway(192, 168, 100, 252);
 IPAddress dns(192, 168, 100, 252);
 IPAddress subnet(255, 255, 255, 0);
 
-WiFiClient client;
+// --------- Clim / Dashboard / HTTP ----------
+const char* CLIM_HOST = "192.168.100.162";
+const int   CLIM_PORT = 8080;
+const float TEMP_MIN = 21.0;
+const float TEMP_MAX = 24.0;
+const float TEMP_HYST = 0.4;
+const char* DASHBOARD_HOST = "192.168.100.10";
+const int   DASHBOARD_PORT = 800;
+const int   HTTP_PORT = 80;
+
+// --------- BLE CONFIG ----------
+const char* BLE_TARGET_NAME = "StationAir";
+const char* BLE_SERVICE_UUID = "181A";
+const char* BLE_PAYLOAD_UUID = "3006";
+const char* BLE_ACK_UUID = "3007";
+const unsigned long BLE_RECONNECT_INTERVAL_MS = 60000UL;

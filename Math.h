@@ -1,1 +1,3 @@
-float mediane(float arr[], int size);
+#pragma once
+
+float mediane(const float arr[], int size);

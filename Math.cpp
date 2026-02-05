@@ -1,9 +1,16 @@
-float mediane(float arr[], int size) {
-  float temp[size];
+#include "Math.h"
 
-  for (int i = 0; i < size; i++) {
-    temp[i] = arr[i];
-  }
+#include <Arduino.h>
+
+float mediane(const float arr[], int size) {
+  if (!arr || size <= 0) return NAN;
+
+  // Keep this simple and heap-free for Arduino.
+  const int kMax = 16;
+  if (size > kMax) size = kMax;
+
+  float temp[kMax];
+  for (int i = 0; i < size; i++) temp[i] = arr[i];
 
   for (int i = 0; i < size - 1; i++) {
     for (int j = i + 1; j < size; j++) {

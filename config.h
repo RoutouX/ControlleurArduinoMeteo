@@ -26,19 +26,12 @@ extern RTC_DS1307 rtc;
 
 // ----------------- APP PARAMS -----------------
 extern const unsigned long SENSOR_PERIOD_MS;
+extern const unsigned long DASHBOARD_PUBLISH_PERIOD_MS;
 extern const float co2_buzz;
-extern const float ALARM_TEMP;
-extern bool alarmEnabled;
-
-extern unsigned long lastSensorMs;
+extern const int SENSOR_MEDIAN_SAMPLES;
 
 // --------- MUTE BUTTON (2 minutes) ----------
 extern const unsigned long MUTE_MS;
-extern unsigned long muteUntilMs;
-
-// --------- Capteur----------------------------
-extern const unsigned int nb_mesure;
-extern const unsigned int delais_mesure;
 
 // --------- WiFi static IP --------------------
 extern IPAddress localIP;
@@ -47,4 +40,23 @@ extern IPAddress dns;
 extern IPAddress subnet;
 
 // --------- BLE ----------------------------
+
+// --------- APP CONFIG ---------
+extern const char* WIFI_SSID;
+extern const char* WIFI_PASS;
+extern const char* CLIM_HOST;
+extern const int   CLIM_PORT;
+extern const float TEMP_MIN;
+extern const float TEMP_MAX;
+extern const float TEMP_HYST;
+extern const char* DASHBOARD_HOST;
+extern const int   DASHBOARD_PORT;
+extern const int   HTTP_PORT;
+
+// --------- BLE CONFIG ---------
+extern const char* BLE_TARGET_NAME;
+extern const char* BLE_SERVICE_UUID;
+extern const char* BLE_PAYLOAD_UUID;
+extern const char* BLE_ACK_UUID;
+extern const unsigned long BLE_RECONNECT_INTERVAL_MS;
 
