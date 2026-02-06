@@ -27,6 +27,7 @@ extern RTC_DS1307 rtc;
 // ----------------- APP PARAMS -----------------
 extern const unsigned long SENSOR_PERIOD_MS;
 extern const unsigned long DASHBOARD_PUBLISH_PERIOD_MS;
+extern const unsigned long DASHBOARD_RETRY_PERIOD_MS;
 extern const float co2_buzz;
 extern const int SENSOR_MEDIAN_SAMPLES;
 

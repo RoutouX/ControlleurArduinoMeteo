@@ -24,7 +24,8 @@ private:
   void fatalHalt_(const char* reason);
 
 private:
-  unsigned long _lastPublishMs = 0;
+  unsigned long _nextDashboardPublishMs = 0;
+  unsigned long _lastPublishCountdownLogMs = 0;
   float _lastTempC = NAN;
   float _lastHumPct = NAN;
   bool _hasSensorMedian = false;

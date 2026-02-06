@@ -9,6 +9,16 @@
 #include "Music.h"
 #include "config.h"
 
+static void logDashboardCountdownMs(unsigned long remainingMs) {
+  unsigned long totalSeconds = remainingMs / 1000UL;
+  unsigned long minutes = totalSeconds / 60UL;
+  unsigned long seconds = totalSeconds % 60UL;
+
+  char buf[64];
+  snprintf(buf, sizeof(buf), "Prochain envoi dashboard dans %lum%02lus", minutes, seconds);
+  logInfo("DASH", buf);
+}
+
 App::App()
   : _cfg(TEMP_MIN, TEMP_MAX),
     _wifi(WIFI_SSID, WIFI_PASS, WifiManager::StaticIpConfig{localIP, dns, gateway, subnet}),
@@ -37,7 +47,8 @@ void App::begin() {
   _console.begin();
 
   // Publish immediately on first telemetry-ready cycle.
-  _lastPublishMs = millis() - DASHBOARD_PUBLISH_PERIOD_MS;
+  _nextDashboardPublishMs = 0;
+  _lastPublishCountdownLogMs = millis();
 
   pinMode(pinBuzzer, OUTPUT);
   player.begin(tempo);
@@ -47,10 +58,26 @@ void App::begin() {
 
   _mute.begin();
 
-  if (!rtc.begin()) {
+  bool rtcOk = rtc.begin();
+  if (!rtcOk) {
     logInfo("HW", "RTC not found");
+  } else {
+    bool rtcRunning = rtc.isrunning();
+    DateTime buildTime(F(__DATE__), F(__TIME__));
+    DateTime rtcNow = rtc.now();
+
+    // IMPORTANT: do not reset the RTC time on every boot.
+    // Only initialize it when the clock isn't running, or when it looks
+    // clearly older than the firmware build time (ex: after a power loss).
+    const uint32_t kBuildTimeSlackSeconds = 10UL * 60UL;
+    bool rtcClearlyBehindBuild =
+      rtcNow.unixtime() + kBuildTimeSlackSeconds < buildTime.unixtime();
+
+    if (!rtcRunning || rtcClearlyBehindBuild) {
+      logInfo("HW", "RTC not set, setting time to build time");
+      rtc.adjust(buildTime);
+    }
   }
-  rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 
   if (!SD.begin(pinSD)) {
     logInfo("HW", "SD card not detected");
@@ -105,20 +132,36 @@ void App::tick() {
     _lastTempC = median.tempC;
     _lastHumPct = median.humPct;
     _hasSensorMedian = true;
+    if (_nextDashboardPublishMs == 0) _nextDashboardPublishMs = nowMs;
 
     _climate.tick(now, median.tempC);
   }
 
-  if (_hasSensorMedian && (nowMs - _lastPublishMs >= DASHBOARD_PUBLISH_PERIOD_MS)) {
-    _lastPublishMs = nowMs; // throttle attempts even when publish fails
-
+  if (_hasSensorMedian && _nextDashboardPublishMs != 0 && nowMs >= _nextDashboardPublishMs) {
     Telemetry t{};
     t.timestamp = rtc.now();
     t.tempC = _lastTempC;
     t.humPct = _lastHumPct;
     t.co2ppm = _bleTelemetry.co2ppm();
     t.climOn = _climate.isOn();
-    _dashboard.publish(t);
+    bool ok = _dashboard.publish(t);
+
+    _lastPublishCountdownLogMs = nowMs;
+    unsigned long nextDelayMs = ok ? DASHBOARD_PUBLISH_PERIOD_MS : DASHBOARD_RETRY_PERIOD_MS;
+    _nextDashboardPublishMs = nowMs + nextDelayMs;
+    if (!ok) {
+      logWarn("DASH", String("Publish failed, retry in ") + (nextDelayMs / 1000UL) + "s");
+    }
+    logDashboardCountdownMs(nextDelayMs);
+  } else if (_hasSensorMedian) {
+    static const unsigned long kCountdownLogEveryMs = 30000UL;
+    if (nowMs - _lastPublishCountdownLogMs >= kCountdownLogEveryMs) {
+      _lastPublishCountdownLogMs = nowMs;
+
+      if (_nextDashboardPublishMs != 0 && _nextDashboardPublishMs > nowMs) {
+        logDashboardCountdownMs(_nextDashboardPublishMs - nowMs);
+      }
+    }
   }
 
   alarm(isMuted, (float)_bleTelemetry.co2ppm(), co2_buzz, nowMs);

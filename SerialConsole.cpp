@@ -224,6 +224,8 @@ void SerialConsole::cmdConfig_() {
   Serial.println(SENSOR_PERIOD_MS);
   Serial.print("Publish period ms: ");
   Serial.println(DASHBOARD_PUBLISH_PERIOD_MS);
+  Serial.print("Publish retry ms:  ");
+  Serial.println(DASHBOARD_RETRY_PERIOD_MS);
   Serial.print("Median samples:   ");
   Serial.println(SENSOR_MEDIAN_SAMPLES);
   Serial.print("Mute ms:          ");

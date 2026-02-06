@@ -22,7 +22,8 @@ RTC_DS1307 rtc;
 const float co2_buzz = 1000;
 const int SENSOR_MEDIAN_SAMPLES = 10;
 const unsigned long SENSOR_PERIOD_MS = 2010UL;
-const unsigned long DASHBOARD_PUBLISH_PERIOD_MS = 300000UL; // 5 minutes
+const unsigned long DASHBOARD_PUBLISH_PERIOD_MS = 120000UL; // 2 minutes
+const unsigned long DASHBOARD_RETRY_PERIOD_MS = 30000UL; // retry when dashboard publish fails
 
 // --------- MUTE BUTTON (2 minutes) ----------
 const unsigned long MUTE_MS = 120000UL; // 2 minutes
@@ -36,13 +37,13 @@ IPAddress dns(192, 168, 100, 252);
 IPAddress subnet(255, 255, 255, 0);
 
 // --------- Clim / Dashboard / HTTP ----------
-const char* CLIM_HOST = "192.168.100.162";
+const char* CLIM_HOST = "192.168.100.11";
 const int   CLIM_PORT = 8080;
 const float TEMP_MIN = 21.0;
 const float TEMP_MAX = 24.0;
 const float TEMP_HYST = 0.4;
 const char* DASHBOARD_HOST = "192.168.100.10";
-const int   DASHBOARD_PORT = 800;
+const int   DASHBOARD_PORT = 3000;
 const int   HTTP_PORT = 80;
 
 // --------- BLE CONFIG ----------

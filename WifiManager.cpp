@@ -45,7 +45,12 @@ bool WifiManager::ensureConnected() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    logInfo("WIFI", String("Connected IP ") + String(WiFi.localIP()));
+    IPAddress gotIp = WiFi.localIP();
+    logInfo("WIFI", String("Connected IP ") + gotIp.toString());
+    if (gotIp[0] != _ipCfg.localIp[0] || gotIp[1] != _ipCfg.localIp[1] ||
+        gotIp[2] != _ipCfg.localIp[2] || gotIp[3] != _ipCfg.localIp[3]) {
+      logWarn("WIFI", String("Expected static IP ") + _ipCfg.localIp.toString());
+    }
     return true;
   }
 
@@ -53,4 +58,3 @@ bool WifiManager::ensureConnected() {
   logInfo("WIFI", String("Firmware=") + WiFi.firmwareVersion());
   return false;
 }
-
