@@ -1,0 +1,260 @@
+flowchart TD
+  %% =====================================================================
+  %% CodeControlleurMeteo — explication détaillée (FR)
+  %% Démarrage: setup() -> App::begin()
+  %% Boucle:    loop()  -> App::tick()
+  %% =====================================================================
+
+  PWR(["Alimentation / reset de la carte"]) --> SETUP["setup() : appelé une fois au boot"]
+  SETUP --> B_BEGIN
+
+  B_READY --> LOOP["loop() : tourne en continu"]
+  LOOP --> T_ENTRY
+  T_EXIT --> LOOP
+
+  %% =========================================================
+  %% Détail: App::begin()
+  %% =========================================================
+  subgraph BEGIN_BLOCK["Détail: App::begin() (initialisation)"]
+    B_BEGIN["App::begin() : initialise tout le système"] --> B_SERIAL["Démarre le port série (115200) + attend la connexion"]
+    B_SERIAL --> B_CONSOLE_BEGIN["SerialConsole.begin() : console de debug (commandes)"]
+
+    B_CONSOLE_BEGIN --> B_SCHED["Prépare la planification d'envoi dashboard<br/>(publish dès que la première mesure est prête)"]
+
+    B_SCHED --> B_AUDIO["Configure buzzer + MusicPlayer.begin(tempo)<br/>(utilisé par l'alarme CO2)"]
+    B_AUDIO --> B_BLINK["Configure la LED blink (pinBlink)"]
+    B_BLINK --> B_MUTE_BEGIN["MuteController.begin() : active le bouton MUTE (anti-rebond)"]
+
+    B_MUTE_BEGIN --> B_RTCQ{"RTC DS1307 détectée ?"}
+    B_RTCQ -- "non" --> B_RTCN["Log: RTC not found (le programme continue)"]
+    B_RTCQ -- "oui" --> B_RTCRUN{"RTC en marche et pas en retard ?"}
+    B_RTCRUN -- "oui" --> B_RTCKEEP["On garde l'heure RTC (pas de reset à chaque boot)"]
+    B_RTCRUN -- "non" --> B_RTCSET["On règle la RTC à l'heure de compilation<br/>(utile après coupure de courant)"]
+
+    B_RTCN --> B_SDQ{"Carte SD détectée ?"}
+    B_RTCKEEP --> B_SDQ
+    B_RTCSET --> B_SDQ
+    B_SDQ -- "non" --> B_SDN["Log: SD card not detected (le programme continue)"]
+    B_SDQ -- "oui" --> B_SDOK["SD initialisée (si présente)"]
+
+    B_SDN --> B_DHT["am2302.begin() : démarre le capteur temp/hum"]
+    B_SDOK --> B_DHT
+
+    B_DHT --> B_LEDSW["Met les 2 LEDs en blanc (état neutre)"]
+
+    B_LEDSW --> B_BLECFG["Prépare la config BLE (nom cible + UUID service/payload/ACK + intervalle)"]
+    B_BLECFG --> B_BLETEL["BleTelemetry.begin(ble) : branche les callbacks (onData/onConnect/onDisconnect)"]
+    B_BLETEL --> B_BLEOK{"BleManager.begin(cfg) OK ?"}
+    B_BLEOK -- "non" --> B_FATAL["fatalHalt_() : LEDs rouges + arrêt définitif"]
+    B_BLEOK -- "oui" --> B_ANIM["startupAnimation() puis LEDs blanc"]
+
+    B_ANIM --> B_WIFI_FIRST["WifiManager.ensureConnected() : première tentative de connexion WiFi (IP statique)"]
+    B_WIFI_FIRST --> B_HTTP_BEGIN["HttpConfigServer.begin() : serveur HTTP de config (port 80)"]
+
+    B_HTTP_BEGIN --> B_READY(["Log: Station ready"])
+    B_FATAL --> B_FATAL
+  end
+
+  %% =========================================================
+  %% Détail: App::tick()
+  %% =========================================================
+  subgraph TICK_BLOCK["Détail: App::tick() (cycle principal)"]
+    T_ENTRY["App::tick() : un cycle non-bloquant"] --> T_NOW["nowMs = millis() (temps depuis le boot)"]
+
+    T_NOW --> T_CONSOLE["SerialConsole.tick() : lit la console série et exécute les commandes"]
+    T_CONSOLE --> T_BLE["BleManager.tick() : scan/connexion/lecture BLE (CO2)"]
+    T_BLE --> T_WIFI["WifiManager.ensureConnected() : maintient la connexion WiFi"]
+    T_WIFI --> T_HTTP["HttpConfigServer.tick() : applique une config reçue (temp/horaire)"]
+
+    T_HTTP --> T_MUTE["MuteController.tick(nowMs) : bouton MUTE (anti-rebond) + stop musique si pressé"]
+    T_MUTE --> T_MUTED["isMuted : mute encore actif ?"]
+
+    T_MUTED --> T_SENSOR["SensorSampler.tick(nowMs) : lit le capteur périodiquement et calcule une médiane"]
+
+    T_SENSOR --> T_NEWMEAS{"Nouvelle médiane (temp/hum) disponible ?"}
+    T_NEWMEAS -- "oui" --> T_MEAS1["Log temp/hum + met à jour LED température (LED0)"]
+    T_MEAS1 --> T_STORE["Sauvegarde temp/hum pour télémétrie + autorise l'envoi dashboard"]
+    T_STORE --> T_CLIM["ClimateController.tick(now,temp) : décide ON/OFF/TEMP selon horaires + hystérésis"]
+    T_NEWMEAS -- "non" --> T_PUBCHK
+
+    T_CLIM --> T_PUBCHK{"Faut-il publier au dashboard maintenant ?"}
+    T_PUBCHK -- "oui" --> T_TEL["Construit Telemetry : timestamp RTC + temp/hum + CO2 + état clim"]
+    T_TEL --> T_DASH["DashboardClient.publish() : envoie HTTP PUT /arduino/publish"]
+    T_DASH --> T_NEXT["Planifie prochain envoi :<br/>- si WiFi+TCP OK: +120s<br/>- sinon: +30s (retry)"]
+    T_PUBCHK -- "non" --> T_COUNT["Option : log du compte à rebours (toutes 30s)"]
+
+    T_NEXT --> T_ALARM["alarm(isMuted, co2ppm) : si CO2 dépasse le seuil et pas muté → joue la mélodie"]
+    T_COUNT --> T_ALARM
+
+    T_ALARM --> T_EXIT["Fin du tick (on retourne dans loop)"]
+  end
+
+  %% =========================================================
+  %% Zooms (détails des fonctions appelées dans App::tick)
+  %% =========================================================
+
+  %% --- Console série ---
+  T_CONSOLE -.-> SC_IN
+  subgraph SC_BLOCK["Zoom: SerialConsole.tick() + commandes"]
+    SC_IN["Accumule les caractères reçus jusqu'à '\\n'"] --> SC_PARSE["Découpe en commande + argument (support '=' ou ':')"]
+    SC_PARSE --> SC_CMD{"Commande ?"}
+    SC_CMD -- "/status" --> SC_STATUS["Affiche : heure RTC, WiFi+IP, état BLE+CO2, état clim, plage temp, horaire IN/OUT"]
+    SC_CMD -- "/config" --> SC_CONFIG["Affiche : config build (WiFi, IP, hôtes/ports, BLE...) + config runtime (temp + horaires)"]
+    SC_CMD -- "/setTempMin" --> SC_MIN["Valide l'argument, met à jour tempMin (runtime)"]
+    SC_CMD -- "/setTempMax" --> SC_MAX["Valide l'argument, met à jour tempMax (runtime)"]
+    SC_CMD -- "autre" --> SC_UNK["Répond 'Unknown command' + aide"]
+  end
+
+  %% --- WiFi ---
+  T_WIFI -.-> W_IN
+  subgraph WIFI_BLOCK["Zoom: WifiManager.ensureConnected()"]
+    W_IN["Vérifie l'état WiFi"] --> W_OKQ{"Déjà connecté ?"}
+    W_OKQ -- "oui" --> W_RETOK["Retour true (rien à faire)"]
+    W_OKQ -- "non" --> W_RATE{"Dernière tentative < 5s ?"}
+    W_RATE -- "oui" --> W_SKIP["Retour false (évite de spammer)"]
+    W_RATE -- "non" --> W_CFG{"SSID/PASS valides ?"}
+    W_CFG -- "non" --> W_NOCFG["Log: SSID/PASS not configured ; retour false"]
+    W_CFG -- "oui" --> W_IP["Configure IP statique (WiFi.config)"]
+    W_IP --> W_BEGIN["Lance la connexion (WiFi.begin)"]
+    W_BEGIN --> W_WAIT["Attend jusqu'à 15s max"]
+    W_WAIT --> W_CONN{"Connecté ?"}
+    W_CONN -- "oui" --> W_LOG["Log: IP obtenue (warn si différente de l'IP attendue)"]
+    W_LOG --> W_RETOK
+    W_CONN -- "non" --> W_FAIL["Log: status + firmware ; retour false"]
+  end
+
+  %% --- HTTP Config ---
+  T_HTTP -.-> H_IN
+  subgraph HTTP_BLOCK["Zoom: HttpConfigServer.tick()"]
+    H_IN["Si un client se connecte : lire la requête"] --> H_AV{"Client disponible ?"}
+    H_AV -- "non" --> H_RET["Retour (pas de requête)"]
+    H_AV -- "oui" --> H_REQ["Lit la ligne: METHOD + PATH"]
+    H_REQ --> H_HDR["Lit les headers et Content-Length"]
+    H_HDR --> H_BODY["Lit le body (si Content-Length > 0)"]
+    H_BODY --> H_ROUTE{"Route reconnue ?"}
+
+    H_ROUTE -- "PATCH /temp" --> HT_PARSE["Extrait mintemp / maxtemp du body (style JSON)"]
+    HT_PARSE --> HT_OK{"Au moins un champ valide ?"}
+    HT_OK -- "non" --> HT_400["Réponse 400 (champs manquants)"]
+    HT_OK -- "oui" --> HT_SET["RuntimeConfig.setTempRangeC(min,max)"]
+    HT_SET --> HT_200["Réponse 200 + log (nouvelle plage)"]
+
+    H_ROUTE -- "PATCH /hours" --> HH_LOOP["Pour chaque jour: lit <day>Start et <day>End (HH:MM)"]
+    HH_LOOP --> HH_SET["Met à jour les horaires valides (start < end)"]
+    HH_SET --> HH_UPD{"Au moins 1 jour mis à jour ?"}
+    HH_UPD -- "non" --> HH_400["Réponse 400 (aucune paire valide)"]
+    HH_UPD -- "oui" --> HH_200["Réponse 200 JSON (horaires) + log"]
+
+    H_ROUTE -- "autre" --> H_404["Réponse 404 (route inconnue)"]
+  end
+
+  %% --- BLE (manager) ---
+  T_BLE -.-> BM_IN
+  subgraph BLE_MANAGER_BLOCK["Zoom: BleManager.tick() (machine d'état)"]
+    BM_IN["BLE.poll()"] --> BM_STATE{"État BLE ?"}
+
+    BM_STATE -- "DISCONNECTED" --> BM_RECO["tryReconnect_(): toutes les 60s → scanForName(targetName)"]
+    BM_RECO --> BM_SCAN["État = SCANNING"]
+
+    BM_STATE -- "SCANNING" --> BM_AV["BLE.available() : périphérique trouvé ?"]
+    BM_AV --> BM_MATCH{"Nom == targetName ?"}
+    BM_MATCH -- "non" --> BM_SCAN
+    BM_MATCH -- "oui" --> BM_CONN["Stop scan + état = CONNECTING"]
+
+    BM_STATE -- "CONNECTING" --> BM_CONNTRY["peripheral.connect()"]
+    BM_CONNTRY --> BM_CONNOK{"Connecté ?"}
+    BM_CONNOK -- "non" --> BM_RESET["resetToDisconnected_() (stop scan, état DISCONNECTED)"]
+    BM_CONNOK -- "oui" --> BM_DISC["discoverAttributes() + trouve service + payload + ack"]
+    BM_DISC --> BM_HAVE{"Tout trouvé ?"}
+    BM_HAVE -- "non" --> BM_DCON["disconnect + resetToDisconnected_()"]
+    BM_HAVE -- "oui" --> BM_SUB["subscribe payload si possible"]
+    BM_SUB --> BM_READY["État = CONNECTED + callback onConnected()"]
+
+    BM_STATE -- "CONNECTED" --> BM_UPD{"payload.valueUpdated() ?"}
+    BM_UPD -- "oui" --> BM_READ["readValue(buf) → callback onData(buf,len)"]
+    BM_UPD -- "non" --> BM_CHK["checkDisconnect_() : toujours connecté ?"]
+    BM_READ --> BM_CHK
+    BM_CHK --> BM_STILL{"Périphérique connecté ?"}
+    BM_STILL -- "oui" --> BM_READY
+    BM_STILL -- "non" --> BM_ONDISC["callback onDisconnected() + resetToDisconnected_()"]
+  end
+
+  %% --- BLE (télémétrie CO2) ---
+  BM_READ -.-> BT_IN
+  subgraph BLE_TEL_BLOCK["Zoom: BleTelemetry.onData_()"]
+    BT_IN["Reçoit une ligne texte (bytes)"] --> BT_PARSE["Parse: seq;timestamp;datetime;eco2"]
+    BT_PARSE --> BT_OK{"Format valide ?"}
+    BT_OK -- "non" --> BT_DROP["Ignore le message (pas de mise à jour)"]
+    BT_OK -- "oui" --> BT_SET["Met à jour: co2ppm + payloadValid=true"]
+    BT_SET --> BT_ACK["Envoie ACK (writeAckU32(seq)) + log OK/FAIL"]
+    BT_ACK --> BT_LED["Met à jour la LED 'air' (LED1) selon CO2 (400→1000 = vert→rouge)"]
+  end
+
+  %% --- Capteur (médiane) ---
+  T_SENSOR -.-> S_IN
+  subgraph SENSOR_BLOCK["Zoom: SensorSampler.tick(nowMs)"]
+    S_IN["Attends SENSOR_PERIOD_MS entre 2 lectures"] --> S_TIME{"Période écoulée ?"}
+    S_TIME -- "non" --> S_NO["Retour false (pas de nouvelle lecture)"]
+    S_TIME -- "oui" --> S_READ["Lit le capteur (interruptions désactivées)"]
+    S_READ --> S_OK{"Status == 0 ?"}
+    S_OK -- "non" --> S_ERR["Log erreur capteur ; retour false"]
+    S_OK -- "oui" --> S_STORE["Ajoute temp/hum dans des buffers"]
+    S_STORE --> S_FULL{"Assez d'échantillons pour une médiane ?"}
+    S_FULL -- "non" --> S_WAIT["Retour false (on attend les prochains samples)"]
+    S_FULL -- "oui" --> S_MED["Calcule médiane(temp) + médiane(hum) ; reset compteur ; return true"]
+  end
+
+  %% --- LEDs (couleurs) ---
+  T_MEAS1 -.-> LED_IN
+  subgraph LED_BLOCK["Zoom: Couleurs LEDs"]
+    LED_IN["LED0 = température"] --> LED_T["Temp &lt; min → bleu<br/>min..max → vert<br/>temp &gt; max → rouge"]
+    LED_T --> LED_A["LED1 = qualité d'air (CO2)<br/>400ppm → vert, 1000ppm → rouge (dégradé)"]
+  end
+
+  %% --- Clim ---
+  T_CLIM -.-> C_IN
+  subgraph CLIM_BLOCK["Zoom: ClimateController.tick(now,temp)"]
+    C_IN["Si temp invalide (NaN) → ne fait rien"] --> C_SCHED{"Dans la plage horaire ?"}
+    C_SCHED -- "non" --> C_OFF["Si clim ON → envoie OFF ; _isOn=false ; log"]
+    C_SCHED -- "oui" --> C_GET["Lit tempMin/tempMax runtime"]
+    C_GET --> C_HI{"Temp &gt; max + hyst ?"}
+    C_HI -- "oui" --> C_ONHI["Envoie TEMP=max puis ON si besoin ; _isOn=true ; log"]
+    C_HI -- "non" --> C_LO{"Temp &lt; min - hyst ?"}
+    C_LO -- "oui" --> C_ONLO["Envoie TEMP=min puis ON si besoin ; _isOn=true ; log"]
+    C_LO -- "non" --> C_OK{"Clim ON et temp dans zone OK ?"}
+    C_OK -- "oui" --> C_OKOFF["Envoie OFF ; _isOn=false ; log"]
+    C_OK -- "non" --> C_KEEP["Ne change rien"]
+  end
+
+  %% --- Dashboard ---
+  T_DASH -.-> D_IN
+  subgraph DASH_BLOCK["Zoom: DashboardClient.publish(t)"]
+    D_IN["Vérifie WiFi puis ouvre une connexion TCP"] --> D_WIFI{"ensureConnected() OK ?"}
+    D_WIFI -- "non" --> D_FAIL["Retour false (pas d'envoi)"]
+    D_WIFI -- "oui" --> D_TCP["client.connect(host,port)"]
+    D_TCP --> D_OK{"Connect OK ?"}
+    D_OK -- "non" --> D_FAIL2["Log 'Connection failed' ; retour false"]
+    D_OK -- "oui" --> D_JSON["Construit un JSON : timestamp ISO + temp/hum + climStatus<br/>CO2=0 → null (pas encore reçu)"]
+    D_JSON --> D_SEND["Envoie HTTP PUT /arduino/publish + body"]
+    D_SEND --> D_WAIT["Attend une réponse jusqu'à ~2s (log)"]
+    D_WAIT --> D_RET["Retour true (si TCP OK, même si réponse absente)"]
+  end
+
+  %% --- Mute ---
+  T_MUTE -.-> M_IN
+  subgraph MUTE_BLOCK["Zoom: MuteController.tick(nowMs)"]
+    M_IN["Lit le bouton (INPUT_PULLUP)"] --> M_DEB["Anti-rebond: 30ms (état stable)"]
+    M_DEB --> M_PRESS{"Bouton pressé (LOW) ?"}
+    M_PRESS -- "non" --> M_END["Ne change rien"]
+    M_PRESS -- "oui" --> M_SET["muteUntil = now + MUTE_MS ; player.stop() ; log 'Muted'"]
+  end
+
+  %% --- Alarme / musique ---
+  T_ALARM -.-> A_IN
+  subgraph ALARM_BLOCK["Zoom: alarm() + MusicPlayer.tick()"]
+    A_IN["Décide si on doit alerter"] --> A_SHOULD{"Pas muté ET CO2 &gt; seuil ?"}
+    A_SHOULD -- "oui" --> A_START["player.start() (démarre la mélodie)"]
+    A_SHOULD -- "non" --> A_STOP["player.stop() (coupe buzzer + blink)"]
+    A_START --> A_TICK["player.tick(nowMs) : lecture non-bloquante (notes + pauses)"]
+    A_STOP --> A_TICK
+  end

@@ -1,0 +1,88 @@
+flowchart TD
+  %% ==========================================================
+  %%  CodeControlleurMeteo — vue d'ensemble (setup() + loop())
+  %% ==========================================================
+
+  PWR([Alimentation / Reset]) --> SETUP["setup()"]
+  SETUP --> BEGIN["App::begin()"]
+
+  subgraph INIT["Initialisation (App::begin)"]
+    BEGIN --> S0["Serial.begin(115200)"]
+    S0 --> S1["SerialConsole.begin()"]
+    S1 --> S2["Init buzzer + player.begin(tempo)"]
+    S2 --> S3["Init LED blink (pinBlink)"]
+    S3 --> S4["MuteController.begin() (bouton)"]
+
+    S4 --> RTCQ{"RTC DS1307 detectee ?"}
+    RTCQ -- "non" --> RTCN["Log: RTC not found"]
+    RTCQ -- "oui" --> RTCO{"RTC running et >= build time ?"}
+    RTCO -- "non" --> RTCSET["rtc.adjust(build time)"]
+    RTCO -- "oui" --> RTCKEEP["Conserver l'heure RTC"]
+
+    RTCN --> SDQ{"Carte SD detectee ?"}
+    RTCSET --> SDQ
+    RTCKEEP --> SDQ
+    SDQ -- "non" --> SDN["Log: SD card not detected"]
+    SDQ -- "oui" --> SDOK["SD ready"]
+
+    SDN --> DHT["am2302.begin() (DHT/AM2302)"]
+    SDOK --> DHT
+    DHT --> LEDW["LEDs = blanc"]
+
+    LEDW --> BLECFG["Configurer BLE (nom + UUIDs)"]
+    BLECFG --> BLETEL["BleTelemetry.begin(ble) (callbacks)"]
+    BLETEL --> BLEOK{"BleManager.begin() OK ?"}
+    BLEOK -- "non" --> HALT["fatalHalt: LEDs rouge + boucle infinie"]
+    BLEOK -- "oui" --> ANIM["startupAnimation() + LEDs blanc"]
+
+    ANIM --> WIFI1["WiFi.ensureConnected() (IP statique)"]
+    WIFI1 --> HTTP1["HttpConfigServer.begin() (port 80)"]
+  end
+
+  HTTP1 --> READY([Station ready])
+  HALT --> HALT
+
+  READY --> LOOP["loop()"]
+  LOOP --> TICK["App::tick()"]
+
+  subgraph MAIN["Cycle (App::tick)"]
+    TICK --> NOW["nowMs = millis()"]
+
+    NOW --> CONS["SerialConsole.tick()<br/>(/status, /config, /setTempMin, /setTempMax)"]
+    CONS --> BLE["BleManager.tick()"]
+
+    BLE --> BLEEVT{"Payload BLE recu ?"}
+    BLEEVT -- "oui" --> BLPARSE["BleTelemetry: parse seq;timestamp;datetime;eco2<br/>co2ppm=... ; writeAck(seq) ; LED air quality (LED1)"]
+    BLEEVT -- "non" --> WIFI2["WiFi.ensureConnected()"]
+    BLPARSE --> WIFI2
+
+    WIFI2 --> HTTP2["HttpConfigServer.tick()<br/>PATCH /temp, PATCH /hours"]
+
+    HTTP2 --> HTTPCHG{"Requete config ?"}
+    HTTPCHG -- "PATCH /temp" --> HTTP_TEMP["RuntimeConfig: tempMin/tempMax"]
+    HTTPCHG -- "PATCH /hours" --> HTTP_HOURS["RuntimeConfig: horaires (7j)"]
+    HTTPCHG -- "non" --> MUTE["MuteController.tick() (bouton)<br/>+ stop musique pendant MUTE_MS"]
+    HTTP_TEMP --> MUTE
+    HTTP_HOURS --> MUTE
+
+    MUTE --> MUTED["isMuted = mute encore actif ?"]
+
+    MUTED --> SENS{"SensorSampler.tick() -> nouveau median ?"}
+    SENS -- "oui" --> SENS1["Lire RTC + log<br/>LED temp (LED0)<br/>Sauver temp/hum"]
+    SENS -- "non" --> PUBQ{"Publier au dashboard maintenant ?"}
+    SENS1 --> CLIM["ClimateController.tick(now,temp)<br/>(hysteresis + horaires)"]
+    CLIM --> PUBQ
+
+    PUBQ -- "oui" --> TEL["Construire Telemetry<br/>(temp, hum, co2ppm, climOn, timestamp)"]
+    TEL --> SEND["DashboardClient.publish()<br/>HTTP PUT /arduino/publish"]
+    SEND --> OK{"Publish OK ?"}
+    OK -- "oui" --> NEXTOK["nextPublish = nowMs + 120s"]
+    OK -- "non" --> NEXTKO["nextPublish = nowMs + 30s (retry)"]
+
+    PUBQ -- "non" --> COUNT["Option: log compte a rebours (toutes 30s)"]
+    NEXTOK --> ALARM
+    NEXTKO --> ALARM
+    COUNT --> ALARM
+
+    ALARM["alarm(): si pas mute et co2ppm depasse le seuil<br/>-> jouer melodie + blink"] --> LOOP
+  end
